@@ -8,7 +8,7 @@ Legacy teacher/student distillation code is still present for historical tests a
 
 - Phase 1 training is complete; no additional training budget is currently planned.
 - Best original checkpoint: `pvc-real-r03` (`val_total_loss=1186.6691`).
-- Browser deployment currently uses the loss-rebalanced search head: `mosaic-fusion-testing/static/models/pvc-rebal-r01.onnx`.
+- Browser deployment currently uses the loss-rebalanced search head: `static/models/pvc-rebal-r01.onnx` in the frontend repo.
 - Training data: `training_data.bin` with 350,307 samples plus policy/value request, label, group, and player-context sidecars.
 - Detailed checkpoint record: `POLICY_VALUE_STATE_2026-03-12.md`.
 
