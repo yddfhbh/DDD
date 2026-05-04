@@ -1,13 +1,12 @@
 /target/
-
-# Replay files
 *.ttrm
-
-# Local script caches
+data/replay-corpus/
 __pycache__/
 *.pyc
-
-# Environment
+.venv*/
+models/*.onnx
+models/*.ckpt
+models/*/
 .env
 .env.*
 !.env.example

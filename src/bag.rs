@@ -1,5 +1,12 @@
+//! 7-bag piece queue prediction for TETR.IO.
+//!
+//! TETR.IO uses a 7-bag randomizer: all 7 pieces (I, O, T, L, J, S, Z) appear
+//! exactly once per bag in random order. By tracking which pieces have been
+//! consumed, we can deduce what remains and predict upcoming pieces.
+
 use crate::header::{Piece, ALL_PIECES, PIECE_NB};
 
+/// Tracks consumption within the current 7-bag.
 #[derive(Debug, Clone)]
 pub(crate) struct BagTracker {
     seen: [bool; PIECE_NB],
@@ -7,6 +14,7 @@ pub(crate) struct BagTracker {
 }
 
 impl BagTracker {
+    /// Create a new tracker with an empty bag (no pieces consumed).
     pub(crate) fn new() -> Self {
         Self {
             seen: [false; PIECE_NB],
@@ -14,6 +22,10 @@ impl BagTracker {
         }
     }
 
+    /// Mark a piece as consumed in the current bag.
+    ///
+    /// If the bag is complete (all 7 consumed), resets to a new bag and
+    /// marks the piece as the first of that new bag.
     pub(crate) fn consume(&mut self, piece: Piece) {
         if self.count >= 7 {
             self.reset();
@@ -27,6 +39,7 @@ impl BagTracker {
         self.count += 1;
     }
 
+    /// Return pieces NOT yet consumed in the current bag.
     pub(crate) fn remaining(&self) -> Vec<Piece> {
         ALL_PIECES
             .iter()
@@ -35,6 +48,9 @@ impl BagTracker {
             .collect()
     }
 
+    /// Given a visible queue, consume all pieces and return the remaining
+    /// unseen pieces that must appear before the next bag starts.
+    // Future: needed for extended queue prediction
     #[allow(dead_code)]
     pub(crate) fn predict_next(&mut self, queue: &[Piece]) -> Vec<Piece> {
         for &piece in queue {
@@ -43,6 +59,8 @@ impl BagTracker {
         self.remaining()
     }
 
+    /// Number of pieces consumed in the current bag.
+    // Future: needed for extended queue prediction
     #[allow(dead_code)]
     pub(crate) fn count(&self) -> u8 {
         self.count
@@ -60,6 +78,14 @@ impl Default for BagTracker {
     }
 }
 
+/// Extend the visible queue with predicted pieces from the 7-bag system.
+///
+/// Takes the known queue, current piece, and optional hold piece. Tracks
+/// bag state across all known pieces and appends predicted pieces if the
+/// prediction is confident enough (≤2 pieces remain in the bag).
+///
+/// Returns a new vector containing the original queue plus any predicted
+/// pieces appended at the end.
 pub(crate) fn extend_queue(queue: &[Piece], current: Piece, hold: Option<Piece>) -> Vec<Piece> {
     let mut tracker = BagTracker::new();
 

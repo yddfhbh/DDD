@@ -7,7 +7,7 @@ const DEFAULT_MANIFEST_PATH: &str =
     "data/replay-corpus/s2-ranked-1v1-rd70-165/manifests/players_manifest.json";
 const DEFAULT_OUTPUT_PATH: &str = "data/calibration/skill_bucket_calibration_v1.cal";
 
-fn create_parent_dir(path: &Path) -> Result<(), String> {
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -15,7 +15,7 @@ fn create_parent_dir(path: &Path) -> Result<(), String> {
 }
 
 fn write_profile(output_path: &Path, profile: &CalibrationProfile) -> Result<(), String> {
-    create_parent_dir(output_path)?;
+    ensure_parent_dir(output_path)?;
     std::fs::write(output_path, profile.to_artifact_string()).map_err(|e| e.to_string())
 }
 

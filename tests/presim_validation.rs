@@ -456,6 +456,9 @@ fn search_root_scores(board: &Board, piece: Piece) -> Vec<f32> {
         b2b: 0,
         combo: 0,
         pending_garbage: 0,
+        lines_total: 0,
+        bag_number: 0,
+        pieces_into_bag: 0,
         coaching: Default::default(),
     };
     let full = find_best_move_with_scores(&state, &config, &weights);

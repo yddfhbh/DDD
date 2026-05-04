@@ -9,7 +9,9 @@ use crate::state::{
     ClearEvent, CoachingState, FatalityState, GameState, ObligationState, PhaseState, SurgeState,
 };
 
-// serde_json + js_sys bridge (serde-wasm-bindgen 0.6 has a parsing bug)
+// ---------------------------------------------------------------------------
+// Serialization helpers (serde_json + js_sys to avoid serde-wasm-bindgen 0.6 bug)
+// ---------------------------------------------------------------------------
 
 pub(crate) fn to_js<T: serde::Serialize>(val: &T) -> JsValue {
     serde_json::to_string(val)
@@ -24,7 +26,11 @@ pub(crate) fn from_js<T: serde::de::DeserializeOwned>(js_val: JsValue) -> Option
         .and_then(|s| serde_json::from_str(&s.as_string().unwrap_or_default()).ok())
 }
 
-// piece ordering: WASM uses Fusion v1 (I O T S Z J L), internal uses Cobra (I O T L J S Z)
+// ---------------------------------------------------------------------------
+// Piece conversion helpers
+// ---------------------------------------------------------------------------
+// WASM API uses Fusion v1 ordering: I=0,O=1,T=2,S=3,Z=4,J=5,L=6
+// Internal (Cobra) ordering:        I=0,O=1,T=2,L=3,J=4,S=5,Z=6
 
 pub(crate) fn piece_from_external(v: u8) -> Option<Piece> {
     match v {
@@ -84,7 +90,9 @@ pub(crate) fn spin_from_u8(v: u8) -> SpinType {
     }
 }
 
-// state -> contract string mappers
+// ---------------------------------------------------------------------------
+// State-to-contract mappers
+// ---------------------------------------------------------------------------
 
 pub(crate) fn fatality_to_contract(v: FatalityState) -> &'static str {
     match v {
@@ -127,7 +135,9 @@ pub(crate) fn coaching_to_contract(v: CoachingState) -> MachineDiagnosticsJson {
     }
 }
 
-// JSON-serializable types for the WASM boundary
+// ---------------------------------------------------------------------------
+// Serde JSON types for WASM serialization
+// ---------------------------------------------------------------------------
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct MoveResultJson {
@@ -171,6 +181,8 @@ pub(crate) struct MoveEvalResultJson {
     pub insight_tags: Vec<String>,
     pub recommended_path: Vec<MoveResultJson>,
     pub best_path_attack_summary: PathAttackSummaryJson,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_move: Option<MoveResultJson>,
 }
 
 #[derive(serde::Serialize)]
@@ -189,21 +201,26 @@ pub(crate) struct CoachingStepJson {
 pub(crate) struct ReplayFrameContextJson {
     pub queue: Option<Vec<u8>>,
     pub hold: Option<u8>,
+    pub opponent_board: Option<Vec<u16>>,
     pub player_pps: Option<f32>,
     pub player_app: Option<f32>,
     pub player_dsp: Option<f32>,
     // Coaching state fields — actual per-move values from replay engine
     pub lines_cleared: Option<u8>,
+    pub lines_total: Option<u32>,
     pub b2b: Option<i32>,
     pub combo: Option<i32>,
     pub combo_before: Option<i32>,
     pub hold_used: Option<bool>,
     pub pending_garbage: Option<u32>,
     pub imminent_garbage: Option<u32>,
+    pub bag_number: Option<u32>,
+    pub pieces_into_bag: Option<u8>,
 }
 
-
-// attack tracking types
+// ---------------------------------------------------------------------------
+// Attack tracking types for WASM serialization
+// ---------------------------------------------------------------------------
 
 pub(crate) fn spin_type_to_str(s: SpinType) -> &'static str {
     match s {
@@ -292,5 +309,66 @@ pub(crate) fn build_path_attack_summary(events: &[ClearEvent]) -> PathAttackSumm
         garbage_clear_count,
         spin_count,
         clear_events: events.iter().map(clear_event_to_json).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_values(key: &str) -> Vec<String> {
+        let fixture = include_str!("../training/tests/fixtures/phase0_contract_fixture.txt");
+        fixture
+            .lines()
+            .find_map(|line| line.split_once('=').filter(|(k, _)| *k == key))
+            .map(|(_, values)| values.split(',').map(|value| value.to_string()).collect())
+            .unwrap_or_else(|| panic!("missing fixture key: {key}"))
+    }
+
+    #[test]
+    fn external_piece_roundtrip_stays_stable() {
+        let expected_names = fixture_values("runtime_external_piece_order");
+        let expected = [
+            Piece::I,
+            Piece::O,
+            Piece::T,
+            Piece::S,
+            Piece::Z,
+            Piece::J,
+            Piece::L,
+        ];
+        assert_eq!(expected_names, vec!["i", "o", "t", "s", "z", "j", "l"]);
+        for (external, expected_piece) in expected.iter().enumerate() {
+            let piece = piece_from_external(external as u8).expect("piece should decode");
+            assert_eq!(piece, *expected_piece);
+            assert_eq!(piece_to_external(piece), external as u8);
+        }
+    }
+
+    #[test]
+    fn replay_frame_context_accepts_phase0_progression_fields() {
+        let json = js_sys::JSON::parse(
+            r#"{
+                \"queue\": [0,1,2],
+                \"hold\": 5,
+                \"opponent_board\": [1,2,3],
+                \"lines_cleared\": 2,
+                \"lines_total\": 14,
+                \"b2b\": 3,
+                \"combo\": 1,
+                \"combo_before\": 0,
+                \"hold_used\": true,
+                \"pending_garbage\": 4,
+                \"imminent_garbage\": 2,
+                \"bag_number\": 6,
+                \"pieces_into_bag\": 5
+            }"#,
+        )
+        .expect("valid JSON");
+        let ctx: ReplayFrameContextJson = from_js(json).expect("should deserialize");
+        assert_eq!(ctx.lines_total, Some(14));
+        assert_eq!(ctx.bag_number, Some(6));
+        assert_eq!(ctx.pieces_into_bag, Some(5));
+        assert_eq!(ctx.opponent_board.as_ref().map(Vec::len), Some(3));
     }
 }

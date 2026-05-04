@@ -1,3 +1,8 @@
+//! End-to-end validation of composite scoring + insight detection pipeline.
+//! Runs diverse board scenarios through the full search, then dumps detailed
+//! composite channel scores, insight tags, and move recommendations for
+//! expert analysis.
+
 use direct_cobra_copy::{
     analysis::{
         compute_sigmoid_c, detect_insights,
@@ -10,6 +15,8 @@ use direct_cobra_copy::{
     search::{find_best_move_with_scores, SearchConfig},
     state::GameState,
 };
+
+// ── Board helpers ──────────────────────────────────────────────────────
 
 fn board_from_bottom_rows(bottom_rows: &[u16]) -> Board {
     assert!(bottom_rows.len() <= 40, "board helper expects at most 40 rows");
@@ -33,8 +40,9 @@ fn row_with_gap(col: usize) -> u16 {
     FULL_ROW & !(1 << col)
 }
 
-    #[allow(dead_code)]
-    fn row_with_gaps(c1: usize, c2: usize) -> u16 {
+/// Full row with two gaps.
+#[allow(dead_code)]
+fn row_with_gaps(c1: usize, c2: usize) -> u16 {
     FULL_ROW & !(1 << c1) & !(1 << c2)
 }
 
@@ -55,6 +63,8 @@ fn weights() -> EvalWeights {
     EvalWeights::default()
 }
 
+// ── Scenario definitions ──────────────────────────────────────────────
+
 struct Scenario {
     name: &'static str,
     description: &'static str,
@@ -64,7 +74,8 @@ struct Scenario {
     hold: Option<Piece>,
     combo: u32,
     b2b: u8,
-    expectation: &'static str,
+    /// What a top player would do in this situation
+    expert_expectation: &'static str,
 }
 
 impl Scenario {
@@ -79,6 +90,8 @@ impl Scenario {
 
 fn build_scenarios() -> Vec<Scenario> {
     vec![
+        // ── 1. Clean flat board with T piece ──
+        // Should prefer T-spin setup or clean placement
         Scenario {
             name: "clean_flat_t_setup",
             description: "Clean 2-row flat stack, T piece. Top player builds T-spin.",
@@ -91,10 +104,12 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 0,
             b2b: 0,
-            expectation: "Should prefer T-spin opportunity or clean flat placement. \
+            expert_expectation: "Should prefer T-spin opportunity or clean flat placement. \
                 Attack score should be moderate if T-spin detected.",
         },
 
+        // ── 2. I-piece with deep well (col 9) ──
+        // Classic Tetris quad setup: exactly 4 rows so I-piece completes all 4
         Scenario {
             name: "quad_well_i_piece",
             description: "4-row stack with col-9 well, I piece. Top player goes for quad.",
@@ -109,11 +124,13 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 0,
             b2b: 0,
-            expectation: "Must drop I vertically in col-9 well for quad clear (4 lines). \
+            expert_expectation: "Must drop I vertically in col-9 well for quad clear (4 lines). \
                 attack_score should be high (quad = 4 damage). board_score should improve \
                 dramatically (4 rows cleared to empty).",
         },
 
+        // ── 3. Active combo with S piece ──
+        // Mid-combo, should maintain chain
         Scenario {
             name: "active_combo_maintain",
             description: "Staircase pattern mid-combo=3, S piece. Must continue chain.",
@@ -129,14 +146,16 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 3,
             b2b: 0,
-            expectation: "Should prefer a move that clears a line to keep combo alive. \
+            expert_expectation: "Should prefer a move that clears a line to keep combo alive. \
                 chain_score should be elevated (combo=3 -> shaped value ~0.53). \
                 ChainBreak insight should NOT fire if combo is maintained.",
         },
 
+        // ── 4. Garbage cheese board with J piece ──
+        // Downstacking scenario
         Scenario {
             name: "garbage_downstack",
-            description: "6-row alternating-gap garbage, J piece. Downstack.",
+            description: "6-row alternating-gap garbage, J piece. Downstack efficiently.",
             board: board_from_bottom_rows(&[
                 row_with_gap(2),
                 row_with_gap(7),
@@ -150,12 +169,14 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 0,
             b2b: 0,
-            expectation: "Should place to maximize line clears or set up clears. \
+            expert_expectation: "Should place to maximize line clears or set up clears. \
                 board_score delta should be positive (cleaning garbage). \
                 DownstackEfficiencyMiss may fire if best move is significantly \
                 better at cleaning than chosen move.",
         },
 
+        // ── 5. Near-death survival with O piece ──
+        // Stack at row 16+, survival mode
         Scenario {
             name: "near_death_survival",
             description: "16-row stack, gaps scattered. O piece. Survive or die.",
@@ -182,11 +203,12 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 0,
             b2b: 0,
-            expectation: "Pure survival. Must not top out. board_score is paramount — \
+            expert_expectation: "Pure survival. Must not top out. board_score is paramount — \
                 attack doesn't matter when you're about to die. \
                 Engine should prioritize height reduction.",
         },
 
+        // ── 6. B2B active with L piece, T-spin opportunity ──
         Scenario {
             name: "b2b_tspin_opportunity",
             description: "3-row stack with T-slot, b2b=2, L piece (hold T available).",
@@ -200,11 +222,13 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: Some(Piece::T),
             combo: 0,
             b2b: 2,
-            expectation: "Should consider hold-swapping to T for T-spin double. \
+            expert_expectation: "Should consider hold-swapping to T for T-spin double. \
                 With b2b=2, T-spin attack_score should be high. \
                 If engine uses L instead, attack_window_miss may fire.",
         },
 
+        // ── 7. Perfect flat board, Z piece ──
+        // Test that engine doesn't over-prioritize attack on clean board
         Scenario {
             name: "flat_clean_z_piece",
             description: "Perfectly flat 2-row board, Z piece. Balance attack vs board.",
@@ -217,11 +241,13 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 0,
             b2b: 0,
-            expectation: "With 2 full rows, any placement that doesn't create holes is fine. \
+            expert_expectation: "With 2 full rows, any placement that doesn't create holes is fine. \
                 board_score should remain stable. attack_score low (no clears from Z placement). \
                 No insights should fire — this is a neutral position.",
         },
 
+        // ── 8. High combo staircase with clearable setup ──
+        // combo=5, tall stack where I-piece must clear to avoid height penalty
         Scenario {
             name: "combo_break_scenario",
             description: "Active combo=5, tall stack with I-clearable gap at col 0. Test chain_break detection.",
@@ -243,12 +269,14 @@ fn build_scenarios() -> Vec<Scenario> {
             hold: None,
             combo: 5,
             b2b: 0,
-            expectation: "High combo=5 means chain_score is high. \
+            expert_expectation: "High combo=5 means chain_score is high. \
                 Engine should prefer I vertical at col 0 for quad clear (4 lines). \
                 Tall stack penalizes non-clearing moves. chain_score should be positive.",
         },
     ]
 }
+
+// ── Analysis runner ───────────────────────────────────────────────────
 
 struct ScenarioResult {
     name: String,
@@ -413,6 +441,8 @@ fn run_scenario(scenario: &Scenario, config: &SearchConfig) -> Option<ScenarioRe
     })
 }
 
+// ── Test runner ────────────────────────────────────────────────────────
+
 #[test]
 fn e2e_composite_scoring_validation() {
     let scenarios = build_scenarios();
@@ -443,7 +473,7 @@ fn e2e_composite_scoring_validation() {
                 for (i, (mv, score)) in r.top_moves.iter().enumerate() {
                     eprintln!("    {}. {} → {:.3}", i + 1, mv, score);
                 }
-                eprintln!("\n  EXPECTATION: {}", scenario.expectation);
+                eprintln!("\n  EXPERT EXPECTATION: {}", scenario.expert_expectation);
                 results.push(r);
             }
             None => {
@@ -456,6 +486,7 @@ fn e2e_composite_scoring_validation() {
     eprintln!("SUMMARY: {} scenarios run, {} produced results", scenarios.len(), results.len());
     eprintln!("{}", "=".repeat(60));
     
+    // ── Sanity assertions ──
     // Every scenario should produce a result
     assert_eq!(results.len(), scenarios.len(), "All scenarios should produce results");
 
@@ -475,7 +506,8 @@ fn e2e_composite_scoring_validation() {
         assert!((0.0..=1.0).contains(&r.win_prob_after), "{}: win_prob_after out of range", r.name);
     }
 
-
+    // ── Scenario-specific assertions ──
+    
     // Quad well: I piece should clear lines (high attack)
     let quad = results.iter().find(|r| r.name == "quad_well_i_piece").unwrap();
     assert!(quad.path_attack > 0.0,

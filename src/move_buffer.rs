@@ -20,10 +20,8 @@ impl MoveBuffer {
 
     #[inline]
     pub fn push(&mut self, m: Move) {
-        debug_assert!(self.len < MAX_MOVES);
-        unsafe {
-            *self.data.get_unchecked_mut(self.len) = m;
-        }
+        assert!(self.len < MAX_MOVES, "move buffer capacity exceeded");
+        self.data[self.len] = m;
         self.len += 1;
     }
 
@@ -128,5 +126,21 @@ impl MoveList {
 
     pub fn moves(&self) -> &[Move] {
         self.moves.as_slice()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MoveBuffer, MAX_MOVES};
+    use crate::header::Move;
+
+    #[test]
+    #[should_panic(expected = "move buffer capacity exceeded")]
+    fn push_panics_before_capacity_overflow() {
+        let mut buffer = MoveBuffer::new();
+        for _ in 0..MAX_MOVES {
+            buffer.push(Move::none());
+        }
+        buffer.push(Move::none());
     }
 }

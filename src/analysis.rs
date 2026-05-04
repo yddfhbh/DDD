@@ -121,10 +121,31 @@ impl Default for PlayerSkill {
     }
 }
 
+/// Sigmoid steepness — controls sharpness of win-probability transitions.
+/// Higher k = sharper transitions around the inflection point.
 pub const SIGMOID_K: f32 = 0.10;
 
+/// Base inflection point for the sigmoid (score where win_prob = 50%).
+/// Shifted by player skill via `compute_sigmoid_c`.
 const SIGMOID_C_BASE: f32 = -13.5;
 
+/// Compute skill-adaptive sigmoid inflection point.
+///
+/// Higher-skilled players maintain cleaner boards (higher eval scores),
+/// so their inflection point shifts deeper negative — they tolerate
+/// worse absolute positions before "losing". The formula:
+///
+///   c = BASE + α·ln(pps) + β·app + γ·dsp
+///
+/// - ln(pps): mechanical recovery speed (diminishing returns via log)
+/// - app: attack efficiency — high APP = cleaner boards, deeper tolerance
+/// - dsp: garbage clearing — recovers from negative eval faster
+///
+/// Calibrated against TetraStats rank data (D through X+):
+///   D (pps=0.69): c ≈ -13.5 + 1.30 + (-0.60) + (-0.50) ≈ -13.3
+///   S (pps=1.57): c ≈ -13.5 + (-1.58) + (-0.96) + (-1.00) ≈ -17.0
+///   X (pps=2.81): c ≈ -13.5 + (-3.62) + (-1.50) + (-1.40) ≈ -20.0
+///   X+(pps=3.27): c ≈ -13.5 + (-4.15) + (-1.50) + (-1.75) ≈ -20.9
 pub fn compute_sigmoid_c(skill: &PlayerSkill) -> f32 {
     const ALPHA: f32 = -3.5; // ln(pps) coefficient (attenuated to reduce X+ false positives)
     const BETA: f32 = -2.0; // app coefficient
@@ -133,10 +154,29 @@ pub fn compute_sigmoid_c(skill: &PlayerSkill) -> f32 {
     SIGMOID_C_BASE + ALPHA * skill.pps.max(0.1).ln() + BETA * skill.app + GAMMA * skill.dsp
 }
 
+/// Convert a search score to win/survival probability via sigmoid.
+/// k controls steepness (higher = sharper transitions),
+/// c is the inflection point (score where probability = 50%).
 pub fn win_prob(search_score: f32, k: f32, c: f32) -> f32 {
     1.0 / (1.0 + (-k * (search_score - c)).exp())
 }
 
+/// Classify severity by win-probability drop between best and actual move.
+///
+/// Thresholds calibrated for Tetris eval scale (wider than chess due to
+/// board-eval variance across placement quality):
+///   ≥25% drop = Blunder (catastrophic misplacement)
+///   ≥12% drop = Mistake (significant quality loss)
+///   ≥ 6% drop = Inaccuracy (suboptimal but recoverable)
+///
+/// **Dual-metric fallback (KataGo-inspired):** When both scores are deep
+/// in the sigmoid tail (both < c−TAIL_MARGIN or both > c+TAIL_MARGIN),
+/// the sigmoid is flat and WP drop ≈ 0 regardless of actual quality
+/// difference. In this region, we fall back to raw score delta
+/// classification, which is linear and still discriminative.
+///
+/// Use `compute_sigmoid_c` to get skill-adaptive `c`, or pass
+/// `SIGMOID_K` / manual `c` for fixed-skill analysis.
 pub fn classify_win_prob_drop(best_score: f32, actual_score: f32, k: f32, c: f32) -> Severity {
     // Tail detection: both scores in sigmoid flat zone where WP drop
     // is uninformative (both far below or far above inflection point c).
@@ -169,6 +209,10 @@ pub fn classify_win_prob_drop(best_score: f32, actual_score: f32, k: f32, c: f32
     }
 }
 
+/// Raw score delta classification for sigmoid tail regions.
+/// Thresholds wider than WP-drop because raw scores have larger variance
+/// and small gaps (1-2 points) in garbage/near-death states are often
+/// placement-order noise with identical practical outcome.
 fn classify_raw_delta(delta: f32) -> Severity {
     if delta >= 8.0 {
         Severity::Blunder
@@ -181,6 +225,9 @@ fn classify_raw_delta(delta: f32) -> Severity {
     }
 }
 
+/// Coaching-state ΔP multiplier. Amplifies the win-probability drop
+/// based on the coaching state *after* the player's move.
+/// The worst (highest-multiplier) dimension wins.
 pub fn coaching_dp_multiplier(coaching_after: &CoachingState) -> f32 {
     let fatality_mul: f32 = match coaching_after.fatality {
         FatalityState::Fatal => 1.5,
@@ -252,24 +299,38 @@ pub fn assemble_composite(
         + context * config.context_weight
 }
 
+/// Input for MVP insight detection — compares best node's composite channels
+/// against the player's actual move outcome.
 #[derive(Debug, Clone)]
 pub struct InsightDetectorInput {
+    /// Best node's per-channel scores from SearchResultFull
     pub best_attack_score: f32,
     pub best_chain_score: f32,
     pub best_board_score: f32,
+    /// Player's actual move aggregate score from root_scores lookup
     pub actual_score: Option<f32>,
+    /// Best move's aggregate composite score
     pub best_score: f32,
+    /// Combo count AFTER the player's actual move (from frame context)
     pub actual_combo_after: u32,
+    /// Lines cleared by the player's actual move
     pub actual_lines_cleared: u8,
+    /// Board eval delta: eval_after - eval_before (positive = board improved)
+    /// Combo count BEFORE the player's actual move (0 = no active combo)
     pub actual_combo_before: u32,
     pub board_eval_delta: f32,
 }
 
+/// Minimum attack score on the best path to flag an attack window miss.
 const ATTACK_WINDOW_THRESHOLD: f32 = 3.0;
+/// Minimum eval loss to consider an attack window genuinely missed.
 const ATTACK_WINDOW_MIN_LOSS: f32 = 0.5;
+/// Minimum chain score on best path to consider combo continuation relevant.
 const CHAIN_RELEVANCE_THRESHOLD: f32 = 0.3;
+/// Minimum board score gap to flag a downstack efficiency miss.
 const DOWNSTACK_BOARD_GAP: f32 = 2.0;
 
+/// Run all MVP insight detectors and return any that fire.
 pub fn detect_insights(input: &InsightDetectorInput) -> Vec<InsightResult> {
     let mut results = Vec::new();
 
@@ -278,7 +339,8 @@ pub fn detect_insights(input: &InsightDetectorInput) -> Vec<InsightResult> {
         .map(|actual| (input.best_score - actual).max(0.0))
         .unwrap_or(0.0);
 
-    // best path had significant attack that the player missed
+    // --- AttackWindowMiss ---
+    // Best path had a significant attack opportunity that the player's move missed.
     if input.best_attack_score > ATTACK_WINDOW_THRESHOLD && eval_loss > ATTACK_WINDOW_MIN_LOSS {
         let delta = input.best_attack_score;
         let severity = (delta / 5.0).clamp(0.0, 1.0);
@@ -289,7 +351,11 @@ pub fn detect_insights(input: &InsightDetectorInput) -> Vec<InsightResult> {
         });
     }
 
-    // player dropped an active combo the engine would've kept
+    // --- ChainBreak ---
+    // Best path maintained a combo (chain_score > threshold) but player broke it
+    // (combo dropped to 0 after their move). Only fires when the player had an
+    // active combo before their move (combo_before > 0) to avoid flagging moves
+    // where no combo was in progress.
     if input.best_chain_score > CHAIN_RELEVANCE_THRESHOLD
         && input.actual_combo_after == 0
         && input.actual_combo_before > 0
@@ -303,7 +369,9 @@ pub fn detect_insights(input: &InsightDetectorInput) -> Vec<InsightResult> {
         });
     }
 
-    // engine found a cleaner downstack path — only fires when the board got worse while
+    // --- DownstackEfficiencyMiss ---
+    // Best path had a significantly better board score than what the player achieved.
+    // Only fires when the player's board actually got worse (negative delta) while
     // best would have improved it.
     let board_gap = input.best_board_score - input.board_eval_delta;
     if board_gap > DOWNSTACK_BOARD_GAP && input.board_eval_delta < 0.0 {

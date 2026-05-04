@@ -54,6 +54,9 @@ fn column_heights(board: &Board) -> [usize; COL_NB] {
     heights
 }
 
+/// count holes and covered cells per column
+/// hole = empty cell below column top
+/// covered = filled cells above the topmost hole (capped at 6)
 #[inline]
 fn holes_and_covered(board: &Board, heights: &[usize; COL_NB]) -> (i32, i32) {
     let mut holes = 0i32;
@@ -90,6 +93,8 @@ fn holes_and_covered(board: &Board, heights: &[usize; COL_NB]) -> (i32, i32) {
     (holes, covered)
 }
 
+/// bumpiness — sum of |h[i]-h[i+1]| and (h[i]-h[i+1])^2
+/// skips the well column (deepest col with both neighbors taller)
 #[inline]
 fn bumpiness(heights: &[usize; COL_NB], well_col: Option<usize>) -> (i32, i32) {
     let mut bump = 0i32;
@@ -110,6 +115,8 @@ fn bumpiness(heights: &[usize; COL_NB], well_col: Option<usize>) -> (i32, i32) {
     (bump, bump_sq)
 }
 
+/// row transitions — count bit transitions in each occupied row
+/// XOR adjacent cells, count 1-bits
 #[inline]
 fn row_transitions(board: &Board, max_height: usize) -> i32 {
     let mut total = 0i32;
@@ -137,6 +144,8 @@ fn row_transitions(board: &Board, max_height: usize) -> i32 {
 }
 
 #[inline]
+/// find the deepest well column (both neighbors taller)
+/// returns (well_col, well_depth)
 fn find_well(heights: &[usize; COL_NB]) -> (Option<usize>, i32) {
     let mut best_col = None;
     let mut best_depth = 0i32;
@@ -162,6 +171,17 @@ fn find_well(heights: &[usize; COL_NB]) -> (Option<usize>, i32) {
     (best_col, best_depth)
 }
 
+/// Detect T-spin double overhang setups.
+///
+/// A TSD requires a T-shaped cavity: an overhang cell (filled) with empty
+/// space below it, flanked by a wall on one side. We scan for the minimal
+/// geometric signature:
+///
+///   col c:   filled at h, empty at h-1  (overhang)
+///   col c±1: filled at h-1 AND h        (wall providing the T-slot)
+///   col c:   empty at h-2 OR h-2 < 0    (cavity below overhang)
+///
+/// Returns count of detected TSD-ready overhangs (0, 1, or rarely 2).
 #[inline]
 fn count_tsd_overhangs(board: &Board, heights: &[usize; COL_NB]) -> i32 {
     let mut count = 0i32;
@@ -211,6 +231,13 @@ fn count_tsd_overhangs(board: &Board, heights: &[usize; COL_NB]) -> i32 {
     count.min(2)
 }
 
+/// Detect 4-wide combo well on either board edge.
+///
+/// A 4-wide well exists when 4 consecutive edge columns (0-3 or 6-9) are
+/// all significantly lower than the average of the remaining 6 columns.
+/// The depth score scales with how much lower the well columns are.
+///
+/// Returns a continuous score (0.0 if no 4-wide detected).
 #[inline]
 fn four_wide_well_score(heights: &[usize; COL_NB]) -> f32 {
     let left_well_avg: f32 = (heights[0] + heights[1] + heights[2] + heights[3]) as f32 / 4.0;

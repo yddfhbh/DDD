@@ -6,9 +6,9 @@ use std::path::Path;
 
 const DEFAULT_MANIFEST_PATH: &str =
     "data/replay-corpus/s2-ranked-1v1-rd70-165/manifests/players_manifest.json";
-const DEFAULT_REPORT_PATH: &str = "data/reports/replay-metrics.txt";
+const DEFAULT_REPORT_PATH: &str = "evidence/replay-metrics.txt";
 
-fn create_parent_dir(path: &Path) -> Result<(), String> {
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -33,7 +33,7 @@ fn main() -> Result<(), String> {
     let report = render_replay_gate_report(&evaluation);
 
     let output_path = Path::new(report_path);
-    create_parent_dir(output_path)?;
+    ensure_parent_dir(output_path)?;
     std::fs::write(output_path, report).map_err(|e| e.to_string())?;
 
     println!(

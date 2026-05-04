@@ -9,16 +9,24 @@ use crate::eval::{self, evaluate, EvalWeights};
 use crate::header::*;
 use crate::move_buffer::MoveBuffer;
 use crate::movegen::generate;
+use crate::pathfinder;
 use crate::search::{find_best_move, find_best_move_with_scores_forced, SearchConfig};
 use crate::state::{ClearType, GameState, TransitionObservation};
 use crate::wasm_board::JsBoard;
-use crate::pathfinder;
 use crate::wasm_types::*;
+
+// ---------------------------------------------------------------------------
+// init
+// ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
 pub fn init() {
     console_error_panic_hook::set_once();
 }
+
+// ---------------------------------------------------------------------------
+// JsAttackConfig
+// ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
 pub struct JsAttackConfig {
@@ -78,6 +86,10 @@ impl JsAttackConfig {
         self.inner.garbage_multiplier
     }
 }
+
+// ---------------------------------------------------------------------------
+// Free functions
+// ---------------------------------------------------------------------------
 
 #[wasm_bindgen(js_name = "calculateAttack")]
 pub fn calculate_attack_wasm(
@@ -142,7 +154,8 @@ pub fn evaluate_position_wasm(
             time_budget_ms: None, // Presim coaching — no time limit, full beam search
             ..SearchConfig::default()
         };
-        // PCs are unrealistic coaching advice, zero the bonus so it doesn't skew eval
+        // PC skip: Perfect Clears are unrealistic coaching advice — zero out PC bonuses
+        // so the engine doesn't inflate eval scores or recommend PC paths
         config.attack_config.pc_garbage = 0;
         config.attack_config.pc_b2b = 0;
 
@@ -293,8 +306,10 @@ pub fn evaluate_position_wasm(
                 };
 
                 // Convert principal variation to recommended path for coaching
-                let recommended_path: Vec<MoveResultJson> = sr.pv.iter().map(|m| {
-                    MoveResultJson {
+                let recommended_path: Vec<MoveResultJson> = sr
+                    .pv
+                    .iter()
+                    .map(|m| MoveResultJson {
                         piece: piece_to_external(m.piece()),
                         rotation: m.rotation() as u8,
                         x: m.x() as i8,
@@ -302,8 +317,8 @@ pub fn evaluate_position_wasm(
                         score: 0.0,
                         spin: m.spin() as u8,
                         hold_used: false,
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 (
                     best_search_score,
@@ -388,6 +403,15 @@ pub fn evaluate_position_wasm(
             insight_tags,
             recommended_path,
             best_path_attack_summary,
+            actual_move: actual_move_for_search.map(|m| MoveResultJson {
+                piece: piece_to_external(m.piece()),
+                rotation: m.rotation() as u8,
+                x: m.x() as i8,
+                y: m.y() as i8,
+                score: actual_search_score_opt.unwrap_or(0.0),
+                spin: m.spin() as u8,
+                hold_used: false,
+            }),
         })
     }));
 
@@ -464,6 +488,10 @@ pub fn get_all_moves_wasm(board: &JsBoard, piece: u8) -> JsValue {
     to_js(&all_moves)
 }
 
+// ---------------------------------------------------------------------------
+// Coaching sequence simulation
+// ---------------------------------------------------------------------------
+
 #[wasm_bindgen(js_name = "simulate_coaching_sequence")]
 pub fn simulate_coaching_sequence_wasm(board: &JsBoard, path: JsValue) -> JsValue {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -478,10 +506,26 @@ pub fn simulate_coaching_sequence_wasm(board: &JsBoard, path: JsValue) -> JsValu
             let piece = piece_from_external(move_json.piece)?;
             let rotation = Rotation::from_u8(move_json.rotation);
             let m = match move_json.spin {
-                2 => Move::new(piece, rotation, move_json.x as i32, move_json.y as i32, true),
-                1 if piece == Piece::T => Move::new_tspin(rotation, move_json.x as i32, move_json.y as i32, false),
-                1 => Move::new_allspin_mini(piece, rotation, move_json.x as i32, move_json.y as i32),
-                _ => Move::new(piece, rotation, move_json.x as i32, move_json.y as i32, false),
+                2 => Move::new(
+                    piece,
+                    rotation,
+                    move_json.x as i32,
+                    move_json.y as i32,
+                    true,
+                ),
+                1 if piece == Piece::T => {
+                    Move::new_tspin(rotation, move_json.x as i32, move_json.y as i32, false)
+                }
+                1 => {
+                    Move::new_allspin_mini(piece, rotation, move_json.x as i32, move_json.y as i32)
+                }
+                _ => Move::new(
+                    piece,
+                    rotation,
+                    move_json.x as i32,
+                    move_json.y as i32,
+                    false,
+                ),
             };
 
             if current_board.obstructed_move(&m) {
@@ -506,7 +550,11 @@ pub fn simulate_coaching_sequence_wasm(board: &JsBoard, path: JsValue) -> JsValu
             let clear_event = if lines_cleared > 0 {
                 let spin_type = m.spin();
                 let b2b_eligible = spin_type != SpinType::NoSpin || lines_cleared >= 4;
-                let next_b2b = if b2b_eligible { sim_b2b.saturating_add(1) } else { 0 };
+                let next_b2b = if b2b_eligible {
+                    sim_b2b.saturating_add(1)
+                } else {
+                    0
+                };
                 let next_combo = sim_combo + 1;
                 let b2b_broken_from = if sim_b2b >= 4 && next_b2b == 0 {
                     Some(sim_b2b)
@@ -575,7 +623,9 @@ pub fn simulate_coaching_sequence_wasm(board: &JsBoard, path: JsValue) -> JsValu
             }
             // Keep up to 1 step after the last productive clear (setup move),
             // but always keep at least MIN_COACHING_STEPS
-            let trim_to = (last_attack_idx + 2).max(MIN_COACHING_STEPS).min(steps.len());
+            let trim_to = (last_attack_idx + 2)
+                .max(MIN_COACHING_STEPS)
+                .min(steps.len());
             steps.truncate(trim_to);
         }
 
@@ -584,6 +634,79 @@ pub fn simulate_coaching_sequence_wasm(board: &JsBoard, path: JsValue) -> JsValu
 
     match result {
         Ok(Some(steps)) => to_js(&steps),
+        _ => JsValue::NULL,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feature extraction for browser-side neural inference (onnxruntime-web)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct FeatureExtractionResultJson {
+    features: Vec<f32>,
+    candidate_features: Vec<f32>,
+    candidate_mask: Vec<bool>,
+    move_count: usize,
+    moves: Vec<MoveResultJson>,
+}
+
+#[wasm_bindgen(js_name = "extract_features_for_position")]
+pub fn extract_features_for_position_wasm(
+    board: &JsBoard,
+    piece: u8,
+    frame: JsValue,
+    opponent_board_js: Option<JsBoard>,
+) -> JsValue {
+    let board_clone = board.inner.clone();
+    let board_for_gen = board.inner.clone();
+    let opp_board = match &opponent_board_js {
+        Some(opp) => opp.inner.clone(),
+        None => crate::board::Board::new(),
+    };
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let p = piece_from_external(piece)?;
+        let frame_context = from_js::<ReplayFrameContextJson>(frame);
+        let state = game_state_from_external_context(
+            board_clone,
+            p,
+            frame_context.as_ref().and_then(|ctx| ctx.queue.as_deref()),
+            frame_context.as_ref().and_then(|ctx| ctx.hold),
+        );
+
+        let features = crate::policy_value_runtime::encode_state_features_flat(&state, &opp_board);
+
+        let mut moves = MoveBuffer::new();
+        generate(&board_for_gen, &mut moves, p, false);
+        let candidates: Vec<crate::header::Move> = moves.as_slice().to_vec();
+        let (candidate_features, candidate_mask) =
+            crate::policy_value_runtime::encode_candidate_features_flat(&candidates);
+
+        let move_descs: Vec<MoveResultJson> = candidates
+            .iter()
+            .map(|m| MoveResultJson {
+                piece: piece_to_external(m.piece()),
+                rotation: m.rotation() as u8,
+                x: m.x() as i8,
+                y: m.y() as i8,
+                score: 0.0,
+                spin: m.spin() as u8,
+                hold_used: false,
+            })
+            .collect();
+
+        Some(FeatureExtractionResultJson {
+            features,
+            candidate_features,
+            candidate_mask,
+            move_count: candidates.len(),
+            moves: move_descs,
+        })
+    }));
+
+    match result {
+        Ok(Some(json)) => to_js(&json),
         _ => JsValue::NULL,
     }
 }

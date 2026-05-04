@@ -69,6 +69,7 @@ impl AttackConfig {
     }
 }
 
+/// base garbage for a line clear + spin type (piece-agnostic)
 fn base_attack(lines: u8, spin: SpinType) -> f32 {
     match spin {
         SpinType::NoSpin => match lines {
@@ -100,6 +101,7 @@ fn base_attack(lines: u8, spin: SpinType) -> f32 {
     }
 }
 
+/// logarithmic B2B chaining bonus (S2 surge mechanic)
 fn b2b_chaining_bonus(b2b: u8) -> f32 {
     if b2b <= 1 {
         return BACK_TO_BACK_BONUS as f32;
@@ -117,6 +119,7 @@ fn b2b_chaining_bonus(b2b: u8) -> f32 {
     floored + third
 }
 
+/// apply combo bonus based on combo table mode
 fn apply_combo(base: f32, combo: u8, table: ComboTable) -> f32 {
     if combo == 0 {
         return base;
@@ -145,6 +148,8 @@ fn apply_combo(base: f32, combo: u8, table: ComboTable) -> f32 {
     }
 }
 
+/// TETR.IO S2 attack calculation
+/// returns garbage lines sent as f32 (caller truncates as needed)
 pub fn calculate_attack(
     lines: u8,
     spin: SpinType,
@@ -165,6 +170,7 @@ pub fn calculate_attack(
     })
 }
 
+/// Parameters for the extended attack calculation.
 pub struct AttackContext<'a> {
     pub lines: u8,
     pub spin: SpinType,
@@ -172,10 +178,14 @@ pub struct AttackContext<'a> {
     pub combo: u8,
     pub config: &'a AttackConfig,
     pub is_perfect_clear: bool,
+    /// If Some(prev_b2b) and prev_b2b >= 4, a non-difficult clear just broke
+    /// a long B2B chain — release stored surge as bonus attack.
     pub b2b_broken_from: Option<u8>,
+    /// If true and the clear is b2b-eligible, add +1.
     pub clears_garbage: bool,
 }
 
+/// Extended attack calculation with surge release and garbage clear boost.
 pub fn calculate_attack_full(ctx: &AttackContext<'_>) -> f32 {
     let AttackContext {
         lines,
@@ -200,6 +210,9 @@ pub fn calculate_attack_full(ctx: &AttackContext<'_>) -> f32 {
 
     let is_b2b_eligible = spin != SpinType::NoSpin || lines >= 4;
 
+    // B2B bonus: trust the caller's b2b value — eligibility is enforced
+    // upstream (engine resets b2b to -1 for non-eligible clears). A positive
+    // b2b here is always legitimate (e.g. PC preserves the chain).
     if b2b > 0 {
         if config.b2b_chaining {
             attack += b2b_chaining_bonus(b2b);
@@ -416,6 +429,8 @@ mod tests {
         assert!(dmg > 4.0, "stacked bonuses should exceed base");
     }
 
+    // --- Fix #3: >5 line scaling ---
+
     #[test]
     fn test_nospin_6_lines() {
         // 5 + (6-5) = 6
@@ -451,6 +466,8 @@ mod tests {
         assert_eq!(dmg, 16.0);
     }
 
+    // --- Fix #2: Combo minifier (max semantics) ---
+
     #[test]
     fn test_combo_multiplier_max_semantics() {
         // combo=2, base=4 (quad, no b2b)
@@ -484,6 +501,8 @@ mod tests {
             "expected ~{expected}, got {dmg}"
         );
     }
+
+    // --- Fix #1: Surge release ---
 
     #[test]
     fn test_surge_release_b2b4_broken() {
@@ -577,6 +596,8 @@ mod tests {
         });
         assert_eq!(old, new);
     }
+
+    // --- Fix #4: Garbage clear boost ---
 
     #[test]
     fn test_garbage_clear_boost_on_quad() {
