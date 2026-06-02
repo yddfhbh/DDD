@@ -11,3 +11,9 @@ models/*/
 .env.*
 !.env.example
 !.env.test
+.env
+.env.local
+node_modules/
+target/
+*.log
+*.tar.gz

@@ -28,6 +28,23 @@ pub(crate) enum Input {
     HardDrop,
 }
 
+impl Input {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Input::NoInput => "NoInput",
+            Input::ShiftLeft => "ShiftLeft",
+            Input::ShiftRight => "ShiftRight",
+            Input::DasLeft => "DasLeft",
+            Input::DasRight => "DasRight",
+            Input::RotateCw => "RotateCw",
+            Input::RotateCcw => "RotateCcw",
+            Input::RotateFlip => "RotateFlip",
+            Input::SoftDrop => "SoftDrop",
+            Input::HardDrop => "HardDrop",
+        }
+    }
+}
+
 // -- Inputs --
 
 #[derive(Clone, Debug)]
@@ -86,6 +103,19 @@ impl GhostMove {
 
 pub(crate) fn get_input(board: &Board, target: &Move, use_finesse: bool, force: bool) -> Inputs {
     get_input_inner(board, target, use_finesse, force, target.piece())
+}
+
+pub fn get_input_names(
+    board: &Board,
+    target: &Move,
+    use_finesse: bool,
+    force: bool,
+) -> Vec<&'static str> {
+    get_input(board, target, use_finesse, force)
+        .data
+        .iter()
+        .map(|input| input.name())
+        .collect()
 }
 
 fn get_input_inner(
@@ -269,9 +299,11 @@ fn get_input_inner(
                         // Non-T allspin: 4-direction immobility check
                         let rt_c = canonical_r(p, rt);
                         let blocked_left = x1u == 0 || cm.get(x1u - 1, rt_c) & bb(y1) != 0;
-                        let blocked_right = x1u >= COL_NB - 1 || cm.get(x1u + 1, rt_c) & bb(y1) != 0;
+                        let blocked_right =
+                            x1u >= COL_NB - 1 || cm.get(x1u + 1, rt_c) & bb(y1) != 0;
                         let blocked_down = y1 <= 0 || cm.get(x1u, rt_c) & bb(y1 - 1) != 0;
-                        let blocked_up = y1 >= ROW_NB as i32 - 1 || cm.get(x1u, rt_c) & bb(y1 + 1) != 0;
+                        let blocked_up =
+                            y1 >= ROW_NB as i32 - 1 || cm.get(x1u, rt_c) & bb(y1 + 1) != 0;
                         if blocked_left && blocked_right && blocked_down && blocked_up {
                             s = SpinType::Mini;
                         }

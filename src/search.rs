@@ -71,14 +71,7 @@ pub fn find_best_move_with_scores_forced(
     weights: &EvalWeights,
     forced_root_move: Option<crate::header::Move>,
 ) -> Option<SearchResultFull> {
-    find_best_move_with_scores_forced_runtime(
-        state,
-        config,
-        weights,
-        None,
-        None,
-        forced_root_move,
-    )
+    find_best_move_with_scores_forced_runtime(state, config, weights, None, None, forced_root_move)
 }
 
 pub fn find_best_move_with_scores_forced_runtime(

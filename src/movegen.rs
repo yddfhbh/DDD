@@ -248,12 +248,18 @@ fn generate_inner<const P: usize, const CHECK_SPIN: bool>(
                                     }
                                 }
                             } else {
-                                let blocked_left = if x1u > 0 { cm.get(x1u - 1, rc) } else { !0u64 };
-                                let blocked_right = if x1u < COL_NB - 1 { cm.get(x1u + 1, rc) } else { !0u64 };
+                                let blocked_left =
+                                    if x1u > 0 { cm.get(x1u - 1, rc) } else { !0u64 };
+                                let blocked_right = if x1u < COL_NB - 1 {
+                                    cm.get(x1u + 1, rc)
+                                } else {
+                                    !0u64
+                                };
                                 let same_col = cm.get(x1u, rc);
                                 let blocked_up = same_col >> 1;
                                 let blocked_down = (same_col << 1) | 1;
-                                let stuck = m & blocked_left & blocked_right & blocked_down & blocked_up;
+                                let stuck =
+                                    m & blocked_left & blocked_right & blocked_down & blocked_up;
                                 spin_set[x1u][r1i][SpinType::NoSpin as usize] &= !stuck;
                                 spin_set[x1u][r1i][SpinType::Mini as usize] |= stuck;
                                 spin_set[x1u][r1i][SpinType::NoSpin as usize] |= m ^ stuck;
@@ -431,8 +437,16 @@ fn do_rotate_180<const P: usize, const CHECK_SPIN: bool>(ctx: &mut RotateContext
                     }
                 }
             } else {
-                let blocked_left = if x1u > 0 { ctx.cm.get(x1u - 1, rc) } else { !0u64 };
-                let blocked_right = if x1u < COL_NB - 1 { ctx.cm.get(x1u + 1, rc) } else { !0u64 };
+                let blocked_left = if x1u > 0 {
+                    ctx.cm.get(x1u - 1, rc)
+                } else {
+                    !0u64
+                };
+                let blocked_right = if x1u < COL_NB - 1 {
+                    ctx.cm.get(x1u + 1, rc)
+                } else {
+                    !0u64
+                };
                 let same_col = ctx.cm.get(x1u, rc);
                 let blocked_up = same_col >> 1;
                 let blocked_down = (same_col << 1) | 1;
@@ -846,33 +860,33 @@ pub fn generate(b: &Board, moves: &mut MoveBuffer, p: Piece, force: bool) {
                     Piece::Z => {
                         generate_inner::<{ Piece::Z as usize }, true>(&cm, moves, slow, force, None)
                     }
-                    _ => {
-                        generate_inner::<{ Piece::T as usize }, false>(&cm, moves, slow, force, None)
-                    }
+                    _ => generate_inner::<{ Piece::T as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
                 }
             } else {
                 match p {
-                    Piece::I => {
-                        generate_inner::<{ Piece::I as usize }, false>(&cm, moves, slow, force, None)
-                    }
-                    Piece::O => {
-                        generate_inner::<{ Piece::O as usize }, false>(&cm, moves, slow, force, None)
-                    }
-                    Piece::L => {
-                        generate_inner::<{ Piece::L as usize }, false>(&cm, moves, slow, force, None)
-                    }
-                    Piece::J => {
-                        generate_inner::<{ Piece::J as usize }, false>(&cm, moves, slow, force, None)
-                    }
-                    Piece::S => {
-                        generate_inner::<{ Piece::S as usize }, false>(&cm, moves, slow, force, None)
-                    }
-                    Piece::Z => {
-                        generate_inner::<{ Piece::Z as usize }, false>(&cm, moves, slow, force, None)
-                    }
-                    Piece::T => {
-                        generate_inner::<{ Piece::T as usize }, false>(&cm, moves, slow, force, None)
-                    }
+                    Piece::I => generate_inner::<{ Piece::I as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
+                    Piece::O => generate_inner::<{ Piece::O as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
+                    Piece::L => generate_inner::<{ Piece::L as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
+                    Piece::J => generate_inner::<{ Piece::J as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
+                    Piece::S => generate_inner::<{ Piece::S as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
+                    Piece::Z => generate_inner::<{ Piece::Z as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
+                    Piece::T => generate_inner::<{ Piece::T as usize }, false>(
+                        &cm, moves, slow, force, None,
+                    ),
                 }
             }
         }
